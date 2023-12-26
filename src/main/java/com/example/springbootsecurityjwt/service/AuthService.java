@@ -12,4 +12,6 @@ import com.example.springbootsecurityjwt.domain.User;
 public interface AuthService {
     Integer register(User userToAdd );
     String login( String username, String password );
+
+    String logout();
 }

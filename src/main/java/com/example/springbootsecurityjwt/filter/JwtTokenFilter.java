@@ -1,15 +1,19 @@
 package com.example.springbootsecurityjwt.filter;
 
-import com.example.springbootsecurityjwt.service.UserDetailsService;
+import com.example.springbootsecurityjwt.domain.User;
+import com.example.springbootsecurityjwt.service.impl.CustomUserDetails;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -27,6 +31,12 @@ public class JwtTokenFilter extends OncePerRequestFilter {
     @Autowired
     private UserDetailsService jwtUserDetailsService; // 自定义的用户详情服务
 
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
+    @Autowired
+    private RedisTemplate redisCacheTemplate;
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
@@ -39,6 +49,7 @@ public class JwtTokenFilter extends OncePerRequestFilter {
             jwtToken = requestTokenHeader.substring(7);
             try {
                 username = Jwts.parser().setSigningKey(secret).parseClaimsJws(jwtToken).getBody().getSubject();
+
             } catch (SignatureException e) {
                 // 处理 JWT 签名错误
             } catch (ExpiredJwtException e) {
@@ -46,27 +57,27 @@ public class JwtTokenFilter extends OncePerRequestFilter {
             }
         } else {
             logger.warn("JWT Token does not begin with Bearer String");
+            filterChain.doFilter(request, response);
+            return;
         }
 
         if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            UserDetails userDetails = this.jwtUserDetailsService.loadUserByUsername(username);
-
-            if (jwtToken != null && jwtTokenIsValid(jwtToken, userDetails)) {
+            final CustomUserDetails user = (CustomUserDetails)redisCacheTemplate.opsForValue().get(username);
+            if (jwtTokenIsValid(jwtToken) && user != null) {
                 UsernamePasswordAuthenticationToken authenticationToken = new UsernamePasswordAuthenticationToken(
-                        userDetails, null, userDetails.getAuthorities());
-                authenticationToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                        user, user.getPassword(), user.getAuthorities());
                 SecurityContextHolder.getContext().setAuthentication(authenticationToken);
             }
         }
         filterChain.doFilter(request, response);
     }
 
-    private boolean jwtTokenIsValid(String jwtToken, UserDetails userDetails) {
+    private boolean jwtTokenIsValid(String jwtToken) {
         // 在这里，你可以实现自定义的验证逻辑，例如检查 Token 是否过期等。
         // 如果验证通过，返回 true；否则，返回 false。
-        Claims claims = Jwts.parser().parseClaimsJws(jwtToken).getBody();
+        Claims claims = Jwts.parser().setSigningKey(secret).parseClaimsJws(jwtToken).getBody();
         long expirationTime = claims.getExpiration().getTime();
         long currentTime = System.currentTimeMillis();
-        return expirationTime < currentTime;
+        return expirationTime > currentTime;
     }
 }
